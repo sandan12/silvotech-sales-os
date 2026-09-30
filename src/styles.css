@@ -168,6 +168,11 @@ textarea:focus-visible {
   box-shadow: 0 0 0 5px rgba(136, 216, 165, 0.11);
 }
 
+.live-dot--muted {
+  background: #e9bb71;
+  box-shadow: 0 0 0 5px rgba(233, 187, 113, 0.11);
+}
+
 .workspace {
   grid-column: 2;
   min-width: 0;
@@ -204,6 +209,20 @@ textarea:focus-visible {
   align-items: center;
   gap: 9px;
   font-weight: 700;
+}
+
+.auth-button {
+  min-height: 42px;
+  padding: 0 16px;
+  border: 0;
+  border-radius: 999px;
+  color: #fff;
+  background: var(--green);
+  font-weight: 800;
+}
+
+.auth-button:hover {
+  background: var(--green-dark);
 }
 
 .quick-capture:hover {
@@ -1088,7 +1107,8 @@ h2 {
   }
 
   .quick-capture span,
-  .saved-note {
+  .saved-note,
+  .auth-button {
     display: none;
   }
 

@@ -3,6 +3,7 @@ import { crmSnapshot, findClient } from "./crm";
 import { Icons } from "./icons";
 import { opportunities } from "./data/opportunities";
 import type { Opportunity } from "./types";
+import { useCrmConnection, type CrmConnectionMode } from "./useCrmConnection";
 
 type View = "today" | "opportunities" | "result";
 
@@ -300,7 +301,21 @@ function Opportunities({ onOpen }: { onOpen: (item: Opportunity) => void }) {
   );
 }
 
-function Result() {
+function connectionLabel(mode: CrmConnectionMode) {
+  if (mode === "live") return "Онлайн · только чтение";
+  if (mode === "connecting") return "Подключение…";
+  if (mode === "auth-required") return "Требуется вход";
+  if (mode === "error") return "Ошибка подключения";
+  return "Снимок · только чтение";
+}
+
+function Result({
+  counts,
+  mode,
+}: {
+  counts: { clients: number; activities: number; products: number };
+  mode: CrmConnectionMode;
+}) {
   return (
     <>
       <section className="page-heading">
@@ -344,15 +359,15 @@ function Result() {
           </div>
           <div>
             <dt>Активных записей</dt>
-            <dd>{crmSnapshot.clientCount}</dd>
+            <dd>{counts.clients}</dd>
           </div>
           <div>
             <dt>Событий в истории</dt>
-            <dd>{crmSnapshot.activityCount}</dd>
+            <dd>{counts.activities}</dd>
           </div>
           <div>
             <dt>Режим подключения</dt>
-            <dd>Только чтение</dd>
+            <dd>{connectionLabel(mode)}</dd>
           </div>
         </dl>
       </section>
@@ -414,6 +429,7 @@ export function App() {
   const [selected, setSelected] = useState<Opportunity | null>(null);
   const [saved, setSaved] = useState(false);
   const title = useMemo(() => nav.find((item) => item.id === view)?.label, [view]);
+  const crm = useCrmConnection();
 
   return (
     <div className="app-shell">
@@ -442,10 +458,10 @@ export function App() {
           })}
         </nav>
         <div className="sidebar__status">
-          <span className="live-dot" />
+          <span className={crm.mode === "live" ? "live-dot" : "live-dot live-dot--muted"} />
           <div>
-            <strong>CRM подключена</strong>
-            <small>снимок · только чтение</small>
+            <strong>{crm.mode === "live" ? "CRM подключена" : "CRM: безопасный режим"}</strong>
+            <small>{connectionLabel(crm.mode)}</small>
           </div>
         </div>
       </aside>
@@ -457,11 +473,23 @@ export function App() {
           </div>
           <div className="topbar__right">
             {saved && <span className="saved-note">Черновик сохранён</span>}
+            {crm.mode === "auth-required" && (
+              <button className="auth-button" onClick={() => void crm.signIn()}>
+                Войти через Google
+              </button>
+            )}
             <button className="quick-capture" onClick={() => setCaptureOpen(true)}>
               <Icons.Mic />
               <span>Быстрое обновление</span>
             </button>
-            <button className="avatar" aria-label="Профиль Sandan">
+            <button
+              className="avatar"
+              aria-label={crm.user ? `Профиль ${crm.user.email ?? "пользователя"}` : "Профиль Sandan"}
+              onClick={() => {
+                if (crm.user) void crm.signOut();
+              }}
+              title={crm.user ? "Выйти" : undefined}
+            >
               SC
             </button>
           </div>
@@ -472,7 +500,7 @@ export function App() {
             <Today onCapture={() => setCaptureOpen(true)} onOpen={setSelected} />
           )}
           {view === "opportunities" && <Opportunities onOpen={setSelected} />}
-          {view === "result" && <Result />}
+          {view === "result" && <Result counts={crm.counts} mode={crm.mode} />}
         </main>
 
         <nav className="mobile-nav" aria-label="Мобильная навигация">
