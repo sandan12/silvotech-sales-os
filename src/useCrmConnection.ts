@@ -16,6 +16,61 @@ type Counts = {
   products: number;
 };
 
+export type CrmClient = {
+  id: string;
+  name: string;
+  status: string;
+  nextActionAt: string | null;
+  lastAttemptAt: string | null;
+  updatedAt: string;
+  notes: string | null;
+  stageId: string | null;
+  expectedValue: number | null;
+  currency: string;
+};
+
+export type CrmActivity = {
+  id: string;
+  clientId: string;
+  type: string;
+  content: string;
+  createdAt: string;
+  dueAt: string | null;
+  completedAt: string | null;
+};
+
+export type CrmProduct = {
+  id: string;
+  name: string;
+  sku: string | null;
+  category: string;
+  unit: string;
+  isActive: boolean;
+};
+
+export type CrmInterest = {
+  id: string;
+  clientId: string;
+  productId: string;
+  quantity: number | null;
+  note: string | null;
+};
+
+export type CrmStage = {
+  id: string;
+  name: string;
+  position: number;
+  isWon: boolean;
+  isLost: boolean;
+};
+
+export type CrmUpdateDraft = {
+  clientId: string;
+  content: string;
+  type: "note" | "call" | "email" | "meeting" | "task";
+  nextActionAt: string | null;
+};
+
 const CRM_ORIGIN = "https://google-crm-connect.vercel.app";
 const CRM_BRIDGE_URL = `${CRM_ORIGIN}/sales-os-auth`;
 const CRM_MESSAGE_TYPE = "silvotech:sales-os-auth";
@@ -31,22 +86,54 @@ export function useCrmConnection() {
     activities: crmSnapshot.activityCount,
     products: crmSnapshot.productCount,
   });
+  const [clients, setClients] = useState<CrmClient[]>([]);
+  const [activities, setActivities] = useState<CrmActivity[]>([]);
+  const [products, setProducts] = useState<CrmProduct[]>([]);
+  const [interests, setInterests] = useState<CrmInterest[]>([]);
+  const [stages, setStages] = useState<CrmStage[]>([]);
 
   const loadCounts = useCallback(async () => {
     if (!supabase) return;
     setMode("connecting");
     setError(null);
 
-    const [clients, activities, products] = await Promise.all([
+    const [clientsResult, activitiesResult, productsResult, interestsResult, stagesResult] =
+      await Promise.all([
       supabase
         .from("clients")
-        .select("id", { count: "exact", head: true })
-        .is("deleted_at", null),
-      supabase.from("client_activities").select("id", { count: "exact", head: true }),
-      supabase.from("products").select("id", { count: "exact", head: true }),
+        .select(
+          "id,name,status,next_action_at,last_attempt_at,updated_at,notes,stage_id,expected_value,currency",
+          { count: "exact" },
+        )
+        .is("deleted_at", null)
+        .order("updated_at", { ascending: false })
+        .limit(250),
+      supabase
+        .from("client_activities")
+        .select("id,client_id,type,content,created_at,due_at,completed_at", { count: "exact" })
+        .order("created_at", { ascending: false })
+        .limit(750),
+      supabase
+        .from("products")
+        .select("id,name,sku,category,unit,is_active", { count: "exact" })
+        .order("name")
+        .limit(500),
+      supabase
+        .from("client_interests")
+        .select("id,client_id,product_id,quantity,note")
+        .limit(1000),
+      supabase
+        .from("pipeline_stages")
+        .select("id,name,position,is_won,is_lost")
+        .order("position"),
     ]);
 
-    const firstError = clients.error ?? activities.error ?? products.error;
+    const firstError =
+      clientsResult.error ??
+      activitiesResult.error ??
+      productsResult.error ??
+      interestsResult.error ??
+      stagesResult.error;
     if (firstError) {
       setError(firstError.message);
       setMode(firstError.message.toLowerCase().includes("jwt") ? "auth-required" : "error");
@@ -54,10 +141,63 @@ export function useCrmConnection() {
     }
 
     setCounts({
-      clients: clients.count ?? 0,
-      activities: activities.count ?? 0,
-      products: products.count ?? 0,
+      clients: clientsResult.count ?? clientsResult.data?.length ?? 0,
+      activities: activitiesResult.count ?? activitiesResult.data?.length ?? 0,
+      products: productsResult.count ?? productsResult.data?.length ?? 0,
     });
+    setClients(
+      (clientsResult.data ?? []).map((item) => ({
+        id: item.id,
+        name: item.name,
+        status: item.status,
+        nextActionAt: item.next_action_at,
+        lastAttemptAt: item.last_attempt_at,
+        updatedAt: item.updated_at,
+        notes: item.notes,
+        stageId: item.stage_id,
+        expectedValue: item.expected_value,
+        currency: item.currency,
+      })),
+    );
+    setActivities(
+      (activitiesResult.data ?? []).map((item) => ({
+        id: item.id,
+        clientId: item.client_id,
+        type: item.type,
+        content: item.content,
+        createdAt: item.created_at,
+        dueAt: item.due_at,
+        completedAt: item.completed_at,
+      })),
+    );
+    setProducts(
+      (productsResult.data ?? []).map((item) => ({
+        id: item.id,
+        name: item.name,
+        sku: item.sku,
+        category: item.category,
+        unit: item.unit,
+        isActive: item.is_active,
+      })),
+    );
+    setInterests(
+      (interestsResult.data ?? []).map((item) => ({
+        id: item.id,
+        clientId: item.client_id,
+        productId: item.product_id,
+        quantity: item.quantity,
+        note: item.note,
+      })),
+    );
+    setStages(
+      (stagesResult.data ?? []).map((item) => ({
+        id: item.id,
+        name: item.name,
+        position: item.position,
+        isWon: item.is_won,
+        isLost: item.is_lost,
+      })),
+    );
     setMode("live");
   }, []);
 
@@ -178,14 +318,46 @@ export function useCrmConnection() {
     await supabase.auth.signOut();
   }
 
+  async function saveConfirmedUpdate(draft: CrmUpdateDraft) {
+    const client = supabase;
+    if (!client || !user) return { error: "Сначала подключите CRM." };
+
+    const { error: activityError } = await client.from("client_activities").insert({
+      client_id: draft.clientId,
+      user_id: user.id,
+      type: draft.type,
+      content: draft.content,
+      due_at: draft.nextActionAt,
+    });
+
+    if (activityError) return { error: activityError.message };
+
+    if (draft.nextActionAt) {
+      const { error: clientError } = await client
+        .from("clients")
+        .update({ next_action_at: draft.nextActionAt })
+        .eq("id", draft.clientId);
+      if (clientError) return { error: clientError.message };
+    }
+
+    await loadCounts();
+    return { error: null };
+  }
+
   return {
     mode,
     user,
     error,
     counts,
+    clients,
+    activities,
+    products,
+    interests,
+    stages,
     signIn,
     signInViaCrm,
     signOut,
+    saveConfirmedUpdate,
     refresh: loadCounts,
   };
 }
