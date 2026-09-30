@@ -20,12 +20,9 @@ if (await crmLogin.isVisible()) {
   await page.getByRole("button", { name: "Закрыть" }).click();
 }
 await page.getByRole("button", { name: "Возможности" }).click();
-await page.getByRole("heading", { name: "Возможности, где есть следующий шаг" }).waitFor();
-await page.getByRole("button", { name: "Открыть Aqua‑Trend" }).first().click();
-await page
-  .getByRole("heading", { name: "Рабочая трубка перистальтического насоса", level: 2 })
-  .waitFor();
-await page.getByRole("button", { name: "Закрыть" }).click();
+await page.getByRole("heading", { name: "Подтверждённые потребности из CRM" }).waitFor();
+await page.getByText("Нет данных CRM").waitFor();
+if (await page.getByText("Aqua‑Trend").count()) failures.push("demo opportunity leaked into empty state");
 await page.getByRole("button", { name: "Быстрое обновление" }).click();
 await page.getByRole("heading", { name: "Расскажите, что изменилось" }).waitFor();
 await page.getByRole("button", { name: "Записать голосом" }).waitFor();
@@ -33,9 +30,14 @@ await page
   .getByLabel("Сообщение об изменении")
   .fill("Созвонился с Мартой из Aqua-Trend. Ждём цену на чёрный TPV на следующей неделе.");
 await page.getByRole("button", { name: "Разобрать сообщение" }).click();
-await page.getByText("Найден клиент: Aqua-Trend Łukasz Pawłowski", { exact: true }).waitFor();
-await page.getByRole("button", { name: "Подтвердить изменения" }).click();
-await page.getByRole("heading", { name: "Черновик подтверждён" }).waitFor();
+await page.getByLabel("Клиент").waitFor();
+await page.getByText("Звонок", { exact: true }).waitFor();
+await page.getByText("Следующее действие", { exact: true }).waitFor();
+const confirm = page.getByRole("button", { name: "Подтвердить и записать" });
+if (!(await confirm.isDisabled())) failures.push("CRM write enabled without live connection and client");
+await page.getByRole("button", { name: "Закрыть" }).click();
+await page.getByRole("button", { name: "Результат" }).click();
+await page.getByRole("heading", { name: "Только измеримое движение" }).waitFor();
 
 const desktopOverflow = await page.evaluate(
   () => document.documentElement.scrollWidth > document.documentElement.clientWidth,
@@ -56,4 +58,4 @@ if (failures.length) {
   process.exit(1);
 }
 
-console.log("QA passed: CRM login, navigation, drawer, change preview, confirmation, responsive overflow.");
+console.log("QA passed: honest empty states, structured preview, write guard, metrics, responsive overflow.");
