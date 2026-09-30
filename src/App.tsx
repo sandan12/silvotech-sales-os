@@ -431,6 +431,7 @@ export function App() {
   const [authPassword, setAuthPassword] = useState("");
   const [authError, setAuthError] = useState<string | null>(null);
   const [authBusy, setAuthBusy] = useState(false);
+  const [bridgeBusy, setBridgeBusy] = useState(false);
   const [selected, setSelected] = useState<Opportunity | null>(null);
   const [saved, setSaved] = useState(false);
   const title = useMemo(() => nav.find((item) => item.id === view)?.label, [view]);
@@ -563,7 +564,29 @@ export function App() {
               </button>
             </header>
             <p className="auth-panel__copy">
-              Используйте тот же email и пароль, что и в существующей SilvoTech CRM.
+              Если CRM уже открыта в этом браузере, подключение займёт несколько секунд.
+            </p>
+            <button
+              className="primary-button auth-submit auth-submit--bridge"
+              type="button"
+              disabled={bridgeBusy}
+              onClick={async () => {
+                setBridgeBusy(true);
+                setAuthError(null);
+                const result = await crm.signInViaCrm();
+                setBridgeBusy(false);
+                if (result.error) {
+                  setAuthError(result.error);
+                  return;
+                }
+                setAuthOpen(false);
+              }}
+            >
+              {bridgeBusy ? "Подключаем…" : "Подключить через открытую CRM"}
+            </button>
+            <div className="auth-divider"><span>или</span></div>
+            <p className="auth-panel__fallback">
+              Войдите отдельным аккаунтом CRM:
             </p>
             <label className="auth-field">
               <span>Email</span>
@@ -590,7 +613,7 @@ export function App() {
                 {authError}
               </p>
             )}
-            <button className="primary-button auth-submit" type="submit" disabled={authBusy}>
+            <button className="secondary-button auth-submit" type="submit" disabled={authBusy}>
               {authBusy ? "Подключаем…" : "Войти и подключить CRM"}
             </button>
           </form>

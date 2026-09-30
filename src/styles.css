@@ -278,8 +278,37 @@ textarea:focus-visible {
 
 .auth-submit {
   width: 100%;
-  margin-top: 22px;
+  margin-top: 18px;
   justify-content: center;
+}
+
+.auth-submit--bridge {
+  margin-top: 0;
+}
+
+.auth-divider {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 22px 0 16px;
+  color: var(--muted);
+  font-size: 12px;
+  text-transform: uppercase;
+}
+
+.auth-divider::before,
+.auth-divider::after {
+  content: "";
+  height: 1px;
+  flex: 1;
+  background: var(--line);
+}
+
+.auth-panel__fallback {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
 }
 
 .auth-submit:disabled {

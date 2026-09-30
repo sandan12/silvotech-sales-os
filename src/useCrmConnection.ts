@@ -16,6 +16,10 @@ type Counts = {
   products: number;
 };
 
+const CRM_ORIGIN = "https://google-crm-connect.vercel.app";
+const CRM_BRIDGE_URL = `${CRM_ORIGIN}/sales-os-auth`;
+const CRM_MESSAGE_TYPE = "silvotech:sales-os-auth";
+
 export function useCrmConnection() {
   const [mode, setMode] = useState<CrmConnectionMode>(
     isSupabaseConfigured ? "connecting" : "snapshot",
@@ -101,6 +105,74 @@ export function useCrmConnection() {
     return { error: null };
   }
 
+  async function signInViaCrm() {
+    const client = supabase;
+    if (!client) return { error: "Подключение к CRM не настроено." };
+
+    setError(null);
+    const popup = window.open(
+      CRM_BRIDGE_URL,
+      "silvotech-crm-auth",
+      "popup=yes,width=560,height=720",
+    );
+
+    if (!popup) {
+      return { error: "Браузер заблокировал окно CRM. Разрешите всплывающие окна и повторите." };
+    }
+
+    return await new Promise<{ error: string | null }>((resolve) => {
+      let settled = false;
+
+      const finish = (result: { error: string | null }) => {
+        if (settled) return;
+        settled = true;
+        window.removeEventListener("message", onMessage);
+        window.clearInterval(closedCheck);
+        window.clearTimeout(timeout);
+        resolve(result);
+      };
+
+      const onMessage = async (event: MessageEvent) => {
+        if (event.origin !== CRM_ORIGIN || event.source !== popup) return;
+        if (event.data?.type !== CRM_MESSAGE_TYPE) return;
+
+        const accessToken = event.data?.accessToken;
+        const refreshToken = event.data?.refreshToken;
+        if (typeof accessToken !== "string" || typeof refreshToken !== "string") {
+          finish({ error: "CRM вернула неполную сессию. Повторите подключение." });
+          return;
+        }
+
+        const { error: sessionError } = await client.auth.setSession({
+          access_token: accessToken,
+          refresh_token: refreshToken,
+        });
+
+        if (sessionError) {
+          finish({ error: "Не удалось принять сессию CRM. Повторите подключение." });
+          return;
+        }
+
+        popup.postMessage({ type: `${CRM_MESSAGE_TYPE}:ack` }, CRM_ORIGIN);
+        popup.close();
+        finish({ error: null });
+      };
+
+      const closedCheck = window.setInterval(() => {
+        if (popup.closed) {
+          finish({ error: "Окно CRM было закрыто до завершения подключения." });
+        }
+      }, 500);
+
+      const timeout = window.setTimeout(() => {
+        popup.close();
+        finish({ error: "CRM не ответила. Убедитесь, что вы вошли в неё, и повторите." });
+      }, 60_000);
+
+      window.addEventListener("message", onMessage);
+    });
+  }
+
   async function signOut() {
     if (!supabase) return;
     await supabase.auth.signOut();
@@ -112,6 +184,7 @@ export function useCrmConnection() {
     error,
     counts,
     signIn,
+    signInViaCrm,
     signOut,
     refresh: loadCounts,
   };
