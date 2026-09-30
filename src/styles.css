@@ -24,10 +24,12 @@
   box-sizing: border-box;
 }
 
+html,
 body {
   margin: 0;
   min-width: 320px;
   min-height: 100vh;
+  overscroll-behavior-x: none;
 }
 
 button,
@@ -323,11 +325,14 @@ textarea:focus-visible {
 .avatar {
   width: 42px;
   height: 42px;
-  border: 0;
   border-radius: 50%;
   background: var(--green);
   color: #fff;
   font-weight: 700;
+  display: grid;
+  place-items: center;
+  cursor: default;
+  user-select: none;
 }
 
 .saved-note {
@@ -920,6 +925,43 @@ h2 {
   justify-content: center;
   gap: 10px;
   font-weight: 800;
+}
+
+.record-button--active {
+  color: #fff;
+  border-color: var(--green);
+  background: var(--green);
+  box-shadow: 0 0 0 5px rgba(31, 107, 79, 0.12);
+}
+
+.record-button--active svg {
+  animation: voice-pulse 1s ease-in-out infinite;
+}
+
+.voice-error {
+  margin: 10px 0 0;
+  color: #a33a32;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+@keyframes voice-pulse {
+  50% {
+    opacity: 0.45;
+    transform: scale(0.9);
+  }
+}
+
+.primary-button:disabled,
+.secondary-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .record-button--active svg {
+    animation: none;
+  }
 }
 
 .capture-actions {

@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { crmSnapshot, findClient } from "./crm";
 import { Icons } from "./icons";
 import { opportunities } from "./data/opportunities";
@@ -6,6 +6,29 @@ import type { Opportunity } from "./types";
 import { useCrmConnection, type CrmConnectionMode } from "./useCrmConnection";
 
 type View = "today" | "opportunities" | "result";
+
+type SpeechRecognitionResultLike = {
+  0: { transcript: string };
+  isFinal: boolean;
+};
+
+type SpeechRecognitionEventLike = {
+  resultIndex: number;
+  results: ArrayLike<SpeechRecognitionResultLike>;
+};
+
+type SpeechRecognitionLike = {
+  continuous: boolean;
+  interimResults: boolean;
+  lang: string;
+  onresult: ((event: SpeechRecognitionEventLike) => void) | null;
+  onerror: ((event: { error: string }) => void) | null;
+  onend: (() => void) | null;
+  start: () => void;
+  stop: () => void;
+};
+
+type SpeechRecognitionConstructor = new () => SpeechRecognitionLike;
 
 const nav = [
   { id: "today" as const, label: "Сегодня", icon: Icons.Today },
@@ -85,10 +108,69 @@ function CapturePanel({
   onSaved: () => void;
 }) {
   const [step, setStep] = useState<"input" | "preview" | "saved">("input");
-  const [text, setText] = useState(
-    "Созвонился с Мартой из Aqua-Trend. Ждём цену на чёрный TPV на следующей неделе.",
-  );
+  const [text, setText] = useState("");
+  const [recording, setRecording] = useState(false);
+  const [voiceError, setVoiceError] = useState<string | null>(null);
+  const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
   const client = findClient("Aqua-Trend");
+
+  useEffect(() => {
+    return () => recognitionRef.current?.stop();
+  }, []);
+
+  function toggleRecording() {
+    if (recording) {
+      recognitionRef.current?.stop();
+      return;
+    }
+
+    const speechWindow = window as typeof window & {
+      SpeechRecognition?: SpeechRecognitionConstructor;
+      webkitSpeechRecognition?: SpeechRecognitionConstructor;
+    };
+    const Recognition =
+      speechWindow.SpeechRecognition ?? speechWindow.webkitSpeechRecognition;
+
+    if (!Recognition) {
+      setVoiceError("Голосовой ввод не поддерживается этим браузером. Используйте Chrome или введите текст.");
+      return;
+    }
+
+    setVoiceError(null);
+    const recognition = new Recognition();
+    recognitionRef.current = recognition;
+    recognition.lang = "ru-RU";
+    recognition.continuous = true;
+    recognition.interimResults = true;
+    const initialText = text.trim();
+
+    recognition.onresult = (event) => {
+      let spoken = "";
+      for (let index = 0; index < event.results.length; index += 1) {
+        spoken += event.results[index]?.[0]?.transcript ?? "";
+      }
+      setText([initialText, spoken.trim()].filter(Boolean).join(" "));
+    };
+    recognition.onerror = (event) => {
+      const message =
+        event.error === "not-allowed"
+          ? "Разрешите доступ к микрофону в браузере и повторите."
+          : "Не удалось распознать речь. Попробуйте ещё раз или введите текст.";
+      setVoiceError(message);
+      setRecording(false);
+    };
+    recognition.onend = () => {
+      setRecording(false);
+      recognitionRef.current = null;
+    };
+
+    try {
+      recognition.start();
+      setRecording(true);
+    } catch {
+      setVoiceError("Не удалось запустить микрофон. Обновите страницу и повторите.");
+    }
+  }
 
   return (
     <div className="modal-backdrop" role="presentation" onMouseDown={onClose}>
@@ -115,14 +197,25 @@ function CapturePanel({
               value={text}
               onChange={(event) => setText(event.target.value)}
               aria-label="Сообщение об изменении"
+              placeholder="Напишите или продиктуйте, что произошло с клиентом…"
             />
-            <button className="record-button" type="button">
+            <button
+              className={recording ? "record-button record-button--active" : "record-button"}
+              type="button"
+              onClick={toggleRecording}
+              aria-pressed={recording}
+            >
               <Icons.Mic />
-              <span>Удерживайте, чтобы записать голосом</span>
+              <span>{recording ? "Слушаю… нажмите, чтобы остановить" : "Записать голосом"}</span>
             </button>
+            {voiceError && <p className="voice-error" role="alert">{voiceError}</p>}
             <div className="capture-actions">
               <p>ИИ сначала покажет изменения. Ничего не запишется автоматически.</p>
-              <button className="primary-button" onClick={() => setStep("preview")}>
+              <button
+                className="primary-button"
+                onClick={() => setStep("preview")}
+                disabled={!text.trim()}
+              >
                 Разобрать сообщение
                 <Icons.Spark />
               </button>
@@ -488,16 +581,12 @@ export function App() {
               <Icons.Mic />
               <span>Быстрое обновление</span>
             </button>
-            <button
+            <div
               className="avatar"
               aria-label={crm.user ? `Профиль ${crm.user.email ?? "пользователя"}` : "Профиль Sandan"}
-              onClick={() => {
-                if (crm.user) void crm.signOut();
-              }}
-              title={crm.user ? "Выйти" : undefined}
             >
               SC
-            </button>
+            </div>
           </div>
         </header>
 
