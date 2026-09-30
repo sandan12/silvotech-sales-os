@@ -1,0 +1,43 @@
+{
+  "exported_at": "2026-09-29T23:33:56.555Z",
+  "counts": {
+    "clients": 314,
+    "activities": 645,
+    "products": 29
+  },
+  "clients": [
+    {
+      "id": "9ab2dc51-7572-4661-8bef-f97a038c9df7",
+      "name": "FLOW SOLUTION SPÓŁKA Z OGRANICZONĄ ODPOWIEDZIALNOŚCIĄ",
+      "website": "http://purityflow.pl/o-nas/",
+      "notes": "PurityFlow: zapytanie na wąż 2/4 mm (4650 m, 0.83 zł/m = 3859.50 zł). 300 m od ręki, 4350 m w dostawie za 1.5 mies. Pytać o inne rozmiary i bufor magazynowy. NIP 6182150925.",
+      "next_action_at": "2026-09-14T10:00:00+00:00",
+      "updated_at": "2026-09-15T13:13:23.610713+00:00",
+      "deleted_at": null,
+      "stage_id": "e5779460-2636-4401-89ca-005503de26cc",
+      "owner_id": "96cad7b2-0bfa-4ee4-a946-49dc4b033fd8"
+    },
+    {
+      "id": "ebcd3b83-a2ea-4cca-b239-ca83c914b89d",
+      "name": "PurityFlow",
+      "website": "https://purityflow.pl",
+      "notes": "Nowy lead z researchu internetowego. Oferuje węże silikonowe i węże do pomp perystaltycznych; potencjalny klient dystrybucyjny. Źródło: purityflow.pl.",
+      "next_action_at": null,
+      "updated_at": "2026-08-31T12:41:54.101706+00:00",
+      "deleted_at": null,
+      "stage_id": null,
+      "owner_id": "96cad7b2-0bfa-4ee4-a946-49dc4b033fd8"
+    },
+    {
+      "id": "cc1849fe-6ec6-4924-8175-2d140a44ae4f",
+      "name": "Aqua-Trend Łukasz Pawłowski",
+      "website": "https://www.pompydozujace.com",
+      "notes": "Klient zadowolony z próbki (5/8,6/9,8/12 mm). Włącza do oferty. Czeka na czarny silikon (preferowane średnice TBD). Sukcesywne zamówienia. [Merged from dup 3f954972-8f84-4d53-86af-bf1f909ed274]: NIP 7282288670. Zamówienie próbne na 3 rolki po 20 mb: 5/8 mm (1,95 zł/m), 6/9 mm (2,40 zł/m), 8/12 mm (4,05 zł/m). Łącznie 168,00 zł netto. Klient poprosił o fakturę pro forma do przedpłaty. Pierwsza dostawa bezpłatna. [Merged from dup 15cf85b2-8736-4b6d-9405-37bf0ac24634]: Potencjalne zastosowanie: przewody silikonowe jako element roboczy pomp perystaltycznych.",
+      "next_action_at": "2026-09-30T09:00:00+00:00",
+      "updated_at": "2026-09-08T13:58:02.220089+00:00",
+      "deleted_at": null,
+      "stage_id": "421a7fce-08b3-46e5-8d96-8e7831f57044",
+      "owner_id": "96cad7b2-0bfa-4ee4-a946-49dc4b033fd8"
+    }
+  ]
+}
