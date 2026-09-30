@@ -28,6 +28,10 @@ await page
 await page.getByRole("button", { name: "Закрыть" }).click();
 await page.getByRole("button", { name: "Быстрое обновление" }).click();
 await page.getByRole("heading", { name: "Расскажите, что изменилось" }).waitFor();
+await page.getByRole("button", { name: "Записать голосом" }).waitFor();
+await page
+  .getByLabel("Сообщение об изменении")
+  .fill("Созвонился с Мартой из Aqua-Trend. Ждём цену на чёрный TPV на следующей неделе.");
 await page.getByRole("button", { name: "Разобрать сообщение" }).click();
 await page.getByText("Найден клиент: Aqua-Trend Łukasz Pawłowski", { exact: true }).waitFor();
 await page.getByRole("button", { name: "Подтвердить изменения" }).click();
