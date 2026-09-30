@@ -14,6 +14,7 @@ const crmLogin = page.getByRole("button", { name: "Войти в CRM" });
 if (await crmLogin.isVisible()) {
   await crmLogin.click();
   await page.getByRole("heading", { name: "Вход в CRM" }).waitFor();
+  await page.getByRole("button", { name: "Подключить через открытую CRM" }).waitFor();
   await page.getByLabel("Email").fill("manager@example.com");
   await page.getByLabel("Пароль").fill("test-password");
   await page.getByRole("button", { name: "Закрыть" }).click();
