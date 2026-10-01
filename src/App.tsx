@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { crmSnapshot } from "./crm";
 import { Icons } from "./icons";
+import { askSalesOsAi, getMailStatus, syncMail } from "./salesOsApi";
 import {
   useCrmConnection,
   type CrmActivity,
@@ -12,7 +13,7 @@ import {
   type CrmUpdateDraft,
 } from "./useCrmConnection";
 
-type View = "today" | "opportunities" | "result";
+type View = "today" | "discovery" | "opportunities" | "result" | "integrations";
 type SpeechResult = { 0: { transcript: string }; isFinal: boolean };
 type SpeechEvent = { resultIndex: number; results: ArrayLike<SpeechResult> };
 type SpeechRecognition = {
@@ -47,9 +48,11 @@ type TodayAction = {
 };
 
 const nav = [
-  { id: "today" as const, label: "Сегодня", icon: Icons.Today },
+  { id: "today" as const, label: "Командный центр", icon: Icons.Today },
+  { id: "discovery" as const, label: "Поиск рынка", icon: Icons.Discovery },
   { id: "opportunities" as const, label: "Возможности", icon: Icons.Opportunity },
-  { id: "result" as const, label: "Результат", icon: Icons.Result },
+  { id: "result" as const, label: "Неделя", icon: Icons.Result },
+  { id: "integrations" as const, label: "Ядро", icon: Icons.Brain },
 ];
 
 const activityLabels: Record<string, string> = {
@@ -171,21 +174,138 @@ function inferActivityType(text: string): CrmUpdateDraft["type"] {
   return "note";
 }
 
-function inferNextActionAt(text: string) {
-  const value = text.toLowerCase();
-  const date = new Date();
-  date.setHours(9, 0, 0, 0);
-  let matched = true;
-  if (/послезавтра/.test(value)) date.setDate(date.getDate() + 2);
-  else if (/завтра/.test(value)) date.setDate(date.getDate() + 1);
-  else if (/сегодня/.test(value)) date.setHours(new Date().getHours() + 1, 0, 0, 0);
-  else if (/следующ(ей|ую) недел/.test(value)) date.setDate(date.getDate() + 7);
-  else {
-    const days = value.match(/через\s+(\d+)\s+дн/);
-    if (days) date.setDate(date.getDate() + Number(days[1]));
-    else matched = false;
+type NarrativeAnalysis = {
+  facts: string[];
+  blocker: string | null;
+  nextAction: string;
+  channel: string;
+  reason: string;
+  questions: string[];
+  suggestedDate: string;
+  emailSubject: string;
+  emailBody: string;
+};
+
+const companyNoise = new Set([
+  "sp", "z", "oo", "s", "a", "sa", "spolka", "ograniczona", "odpowiedzialnoscia",
+  "ltd", "limited", "gmbh", "company", "firma", "client", "klient",
+]);
+
+function normalizeName(value: string) {
+  return value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-zа-яё0-9]+/gi, " ")
+    .trim()
+    .split(/\s+/)
+    .filter((word) => !companyNoise.has(word))
+    .join(" ");
+}
+
+function matchClient(text: string, clients: CrmClient[]) {
+  const normalizedText = normalizeName(text);
+  const textWords = new Set(normalizedText.split(/\s+/));
+  let best: { client: CrmClient; score: number } | null = null;
+
+  for (const client of clients) {
+    const normalizedClient = normalizeName(client.name);
+    if (!normalizedClient) continue;
+    const words = normalizedClient.split(/\s+/).filter((word) => word.length >= 4);
+    let score = normalizedText.includes(normalizedClient) ? 100 : 0;
+    if (!score && words.length) {
+      const matched = words.filter((word) => textWords.has(word)).length;
+      score = Math.round((matched / words.length) * 90);
+    }
+    const websiteDomain = client.website
+      ?.replace(/^https?:\/\//i, "")
+      .replace(/^www\./i, "")
+      .split(/[/.]/)[0];
+    if (websiteDomain && normalizedText.includes(normalizeName(websiteDomain))) score = 98;
+    if (!best || score > best.score) best = { client, score };
   }
-  return matched ? date.toISOString() : null;
+
+  return best && best.score >= 60 ? best : null;
+}
+
+function extractCandidateName(text: string) {
+  const firstPart = text
+    .trim()
+    .split(/\s+(?:должен|должна|должны|говорит|сказал|сказала|покупает|закупается|ждёт|ждет|просит|хочет|нужно|надо)(?:\s|$)/i)[0]
+    ?.replace(/^(?:по|про|клиент|компания)\s+/i, "")
+    .replace(/[,:;.!?]+$/g, "")
+    .trim();
+  if (!firstPart || firstPart.length > 80) return "Новый клиент";
+  return firstPart
+    .split(/\s+/)
+    .slice(0, 5)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function addBusinessDays(count: number) {
+  const date = new Date();
+  while (count > 0) {
+    date.setDate(date.getDate() + 1);
+    const day = date.getDay();
+    if (day !== 0 && day !== 6) count -= 1;
+  }
+  return date.toISOString().slice(0, 10);
+}
+
+function analyzeNarrative(text: string, clientName: string): NarrativeAnalysis {
+  const value = text.toLowerCase();
+  const facts: string[] = [];
+  const offerSent = /отправил|отправила|выслал|выслала/.test(value) && /цен|оферт|предложен/.test(value);
+  const priceObjection = /цен[аы]?.{0,30}(высок|дорог)|высок.{0,20}цен/.test(value);
+  const reviewPending = /должен.{0,35}провер|должна.{0,35}провер|рассматрива|жд[её]м.{0,30}ответ/.test(value);
+  const declarationSent = /отправил|отправила|выслал|выслала/.test(value) && /декларац|сертификат|документ/.test(value);
+  const germany = /германи/.test(value);
+
+  if (reviewPending) facts.push("Клиент проверяет предложение");
+  if (priceObjection) facts.push("Клиент сообщил, что прежняя цена была высокой");
+  if (offerSent) facts.push("Отправлена обновлённая цена или предложение");
+  if (declarationSent) facts.push("Клиенту отправлена декларация или технический документ");
+  if (germany) facts.push("Текущий источник закупки — Германия, со слов менеджера");
+  if (!facts.length) facts.push("Зафиксировано новое сообщение менеджера без дополнительных выводов");
+
+  const nextAction = offerSent || reviewPending
+    ? "Уточнить результат проверки обновлённой цены и декларации"
+    : "Уточнить текущий статус и следующий критерий решения";
+  const channel = offerSent || declarationSent ? "Сначала email, затем звонок при отсутствии ответа" : "Короткий звонок";
+  const reason = offerSent || declarationSent
+    ? "Клиенту нужно сверить цену и документ; письмо сохранит предметный контекст, звонок нужен только для ускорения решения."
+    : "В истории недостаточно данных о критерии решения; разговор быстрее закроет главный пробел.";
+  const questions = [
+    priceObjection ? "Стала ли новая цена конкурентной относительно текущей закупки?" : "Какой критерий сейчас определяет решение?",
+    declarationSent ? "Подходит ли декларация под требования клиента?" : "Какие документы обязательны для согласования?",
+    "Какой объём, спецификация и желаемый срок первой закупки?",
+    "Когда клиент готов дать окончательный ответ?",
+  ];
+  const emailSubject = `Уточнение по предложению — ${clientName}`;
+  const emailBody = [
+    "Добрый день!",
+    "",
+    "Хочу уточнить, удалось ли проверить обновлённое предложение и отправленные документы.",
+    priceObjection ? "Буду благодарен за обратную связь: стала ли новая цена конкурентной для вас?" : "Буду благодарен за обратную связь по условиям.",
+    declarationSent ? "Также прошу подтвердить, подходит ли наша декларация под ваши требования." : "",
+    "Если предложение актуально, подскажите, пожалуйста, требуемую спецификацию, объём и желаемый срок поставки.",
+    "",
+    "С уважением,",
+    "Sandan",
+  ].filter(Boolean).join("\n");
+
+  return {
+    facts,
+    blocker: priceObjection ? "Цена выше ожидаемой / сравнение с текущим поставщиком" : null,
+    nextAction,
+    channel,
+    reason,
+    questions,
+    suggestedDate: addBusinessDays(3),
+    emailSubject,
+    emailBody,
+  };
 }
 
 function CapturePanel({
@@ -204,23 +324,44 @@ function CapturePanel({
   const [step, setStep] = useState<"input" | "preview" | "saved">("input");
   const [text, setText] = useState("");
   const [source, setSource] = useState<"текст" | "голос">("текст");
-  const [selectedClientId, setSelectedClientId] = useState("");
+  const [clientChoice, setClientChoice] = useState("");
+  const [newClientName, setNewClientName] = useState("");
+  const [newClientEmail, setNewClientEmail] = useState("");
+  const [newClientPhone, setNewClientPhone] = useState("");
+  const [newClientWebsite, setNewClientWebsite] = useState("");
+  const [nextActionDate, setNextActionDate] = useState("");
+  const [matchScore, setMatchScore] = useState<number | null>(null);
   const [recording, setRecording] = useState(false);
   const [voiceError, setVoiceError] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const recognitionRef = useRef<SpeechRecognition | null>(null);
   const type = inferActivityType(text);
-  const nextActionAt = inferNextActionAt(text);
+  const selectedClient = clients.find((client) => client.id === clientChoice) ?? null;
+  const analysis = useMemo(
+    () => analyzeNarrative(text, selectedClient?.name ?? (newClientName || "клиент")),
+    [text, selectedClient?.name, newClientName],
+  );
 
   useEffect(() => () => recognitionRef.current?.stop(), []);
 
   function detectClient() {
-    const normalized = text.toLocaleLowerCase("ru");
-    const detected = [...clients]
-      .sort((a, b) => b.name.length - a.name.length)
-      .find((item) => normalized.includes(item.name.toLocaleLowerCase("ru")));
-    setSelectedClientId(detected?.id ?? "");
+    const match = matchClient(text, clients);
+    const email = text.match(/[\w.+-]+@[\w.-]+\.[a-z]{2,}/i)?.[0] ?? "";
+    const website = text.match(/https?:\/\/[^\s]+|(?:www\.)?[\w-]+\.(?:pl|com|de|eu|ru)\b/i)?.[0] ?? "";
+    const phone = text.match(/(?:\+?\d[\d\s().-]{7,}\d)/)?.[0] ?? "";
+    if (match) {
+      setClientChoice(match.client.id);
+      setMatchScore(match.score);
+    } else {
+      setClientChoice("__new__");
+      setNewClientName(extractCandidateName(text));
+      setNewClientEmail(email);
+      setNewClientPhone(phone);
+      setNewClientWebsite(website);
+      setMatchScore(null);
+    }
+    setNextActionDate(analyzeNarrative(text, match?.client.name ?? extractCandidateName(text)).suggestedDate);
     setStep("preview");
   }
 
@@ -270,13 +411,31 @@ function CapturePanel({
   }
 
   async function confirm() {
-    if (!selectedClientId) {
-      setSaveError("Выберите клиента перед подтверждением.");
+    const creating = clientChoice === "__new__";
+    if (!clientChoice || (creating && !newClientName.trim())) {
+      setSaveError("Выберите клиента или укажите название нового.");
       return;
     }
     setSaving(true);
     setSaveError(null);
-    const result = await save({ clientId: selectedClientId, content: text.trim(), type, nextActionAt });
+    const nextActionAt = nextActionDate
+      ? new Date(`${nextActionDate}T09:00:00`).toISOString()
+      : null;
+    const result = await save({
+      clientId: creating ? null : clientChoice,
+      newClient: creating
+        ? {
+            name: newClientName.trim(),
+            email: newClientEmail.trim() || null,
+            phone: newClientPhone.trim() || null,
+            website: newClientWebsite.trim() || null,
+            notes: `Исходный контекст из Sales OS: ${text.trim()}`,
+          }
+        : null,
+      content: text.trim(),
+      type,
+      nextActionAt,
+    });
     setSaving(false);
     if (result.error) {
       setSaveError(result.error);
@@ -315,27 +474,63 @@ function CapturePanel({
           <>
             <div className="preview-callout">
               <Icons.Spark />
-              <div><strong>{selectedClientId ? "Клиент найден — проверьте" : "Выберите клиента"}</strong><span>Автосовпадение основано только на названии из CRM</span></div>
+              <div>
+                <strong>{clientChoice === "__new__" ? "Клиента нет в CRM — подготовлено создание" : "Клиент распознан — проверьте"}</strong>
+                <span>{matchScore ? `Совпадение по названию или домену: ${matchScore}%` : "Будут сохранены только доступные данные из сообщения"}</span>
+              </div>
             </div>
             <label className="preview-field">
               <span>Клиент</span>
-              <select aria-label="Клиент" value={selectedClientId} onChange={(event) => setSelectedClientId(event.target.value)}>
+              <select aria-label="Клиент" value={clientChoice} onChange={(event) => setClientChoice(event.target.value)}>
                 <option value="">Не выбран</option>
+                <option value="__new__">＋ Создать нового клиента</option>
                 {clients.map((client) => <option key={client.id} value={client.id}>{client.name}</option>)}
               </select>
             </label>
+            {clientChoice === "__new__" && (
+              <div className="new-client-grid">
+                <label><span>Название *</span><input value={newClientName} onChange={(event) => setNewClientName(event.target.value)} /></label>
+                <label><span>Email</span><input type="email" value={newClientEmail} onChange={(event) => setNewClientEmail(event.target.value)} /></label>
+                <label><span>Телефон</span><input value={newClientPhone} onChange={(event) => setNewClientPhone(event.target.value)} /></label>
+                <label><span>Сайт</span><input value={newClientWebsite} onChange={(event) => setNewClientWebsite(event.target.value)} /></label>
+              </div>
+            )}
             <div className="change-list">
               <div><span>Запись в историю</span><p>{text.trim()}</p></div>
               <div><span>Тип события</span><p>{activityLabels[type]}</p></div>
-              <div><span>Следующее действие</span><p>{nextActionAt ? formatDate(nextActionAt, true) : "Дата не найдена — текущий срок CRM не изменится"}</p></div>
               <div><span>Источник</span><p>Sales OS · {source}</p></div>
             </div>
+            <section className="advisor-card">
+              <div>
+                <p className="eyebrow">Контекст сделки</p>
+                <ul>{analysis.facts.map((fact) => <li key={fact}>{fact}</li>)}</ul>
+                {analysis.blocker && <p className="advisor-blocker"><strong>Препятствие:</strong> {analysis.blocker}</p>}
+              </div>
+              <div>
+                <p className="eyebrow">Рекомендация</p>
+                <h3>{analysis.nextAction}</h3>
+                <p><strong>Канал:</strong> {analysis.channel}</p>
+                <p>{analysis.reason}</p>
+                <label className="date-field">
+                  <span>Предлагаемый срок</span>
+                  <input type="date" value={nextActionDate} onChange={(event) => setNextActionDate(event.target.value)} />
+                </label>
+              </div>
+            </section>
+            <section className="question-card">
+              <p className="eyebrow">Что нужно узнать</p>
+              <ol>{analysis.questions.map((question) => <li key={question}>{question}</li>)}</ol>
+            </section>
+            <section className="email-draft">
+              <div><p className="eyebrow">Черновик письма</p><strong>{analysis.emailSubject}</strong></div>
+              <pre>{analysis.emailBody}</pre>
+            </section>
             {mode !== "live" && <p className="save-error" role="alert">Для записи сначала подключите CRM.</p>}
             {saveError && <p className="save-error" role="alert">{saveError}</p>}
             <div className="capture-actions">
               <button className="secondary-button" onClick={() => setStep("input")}>Исправить</button>
-              <button className="primary-button" onClick={confirm} disabled={saving || mode !== "live" || !selectedClientId}>
-                <Icons.Check />{saving ? "Сохраняем…" : "Подтвердить и записать"}
+              <button className="primary-button" onClick={confirm} disabled={saving || mode !== "live" || !clientChoice || (clientChoice === "__new__" && !newClientName.trim())}>
+                <Icons.Check />{saving ? "Сохраняем…" : clientChoice === "__new__" ? "Создать клиента и записать" : "Подтвердить и записать"}
               </button>
             </div>
           </>
@@ -454,6 +649,98 @@ function Opportunities({ items, mode, onOpen }: { items: LiveOpportunity[]; mode
   );
 }
 
+const discoveryCountries = [
+  "Польша", "Германия", "Чехия", "Словакия", "Литва",
+  "Латвия", "Эстония", "Нидерланды", "Бельгия", "Франция",
+];
+
+function Discovery({ products, mode }: { products: CrmProduct[]; mode: CrmConnectionMode }) {
+  const [country, setCountry] = useState("Польша");
+  const [productId, setProductId] = useState("all");
+  const [customerType, setCustomerType] = useState("");
+  const [result, setResult] = useState("");
+  const [provider, setProvider] = useState("");
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const product = products.find((item) => item.id === productId);
+
+  async function runDiscovery() {
+    setBusy(true);
+    setError("");
+    setResult("");
+    const catalogContext = product
+      ? `Товар: ${product.name}; SKU: ${product.sku ?? "не указан"}; категория: ${product.category}; единица: ${product.unit}.`
+      : `Используй весь активный каталог CRM (${products.filter((item) => item.isActive).length} позиций).`;
+    try {
+      const response = await askSalesOsAi(
+        "discovery",
+        [
+          `Страна поиска: ${country}.`,
+          customerType ? `Предпочтительный тип компании: ${customerType}.` : "",
+          catalogContext,
+          "Найди до пяти новых подходящих компаний. Для каждой покажи источники, товары-кандидаты, основания, неизвестные параметры, гипотезу модели закупок, первое письмо и начало звонка. Не создавай записи CRM.",
+        ].filter(Boolean).join("\n"),
+      );
+      setResult(response.reply);
+      setProvider(response.provider);
+    } catch (caught) {
+      const message = caught instanceof Error ? caught.message : "Не удалось выполнить исследование";
+      setError(message === "AI provider is not configured"
+        ? "AI пока не подключён. Добавьте бесплатный ключ Groq, Gemini или OpenRouter в CRM → Настройки → Модели AI."
+        : message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <>
+      <section className="page-heading discovery-heading">
+        <div>
+          <p className="eyebrow">Исследователь рынка</p>
+          <h1>Новые клиенты одной командой</h1>
+          <p>Выберите рынок и товар. Ядро изучит компании и каталоги, отделит факты от гипотез и подготовит первый контакт.</p>
+        </div>
+      </section>
+      <section className="discovery-console">
+        <div className="discovery-controls">
+          <label><span>Страна</span><select value={country} onChange={(event) => setCountry(event.target.value)}>{discoveryCountries.map((item) => <option key={item}>{item}</option>)}</select></label>
+          <label>
+            <span>Каталог</span>
+            <select value={productId} onChange={(event) => setProductId(event.target.value)}>
+              <option value="all">Весь активный каталог</option>
+              {products.filter((item) => item.isActive).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+            </select>
+          </label>
+          <label>
+            <span>Тип компании — необязательно</span>
+            <input value={customerType} onChange={(event) => setCustomerType(event.target.value)} placeholder="Например: дистрибьюторы пищевого оборудования" />
+          </label>
+          <button className="discovery-run" onClick={runDiscovery} disabled={busy || mode !== "live"}>
+            <Icons.Discovery />
+            <span><strong>{busy ? "Исследую рынок…" : "Найти подходящих клиентов"}</strong><small>Факты, гипотезы, товары и первый контакт</small></span>
+          </button>
+        </div>
+        <div className="discovery-status"><span className={mode === "live" ? "live-dot" : "live-dot live-dot--muted"} /><p>{mode === "live" ? `${products.length} товаров доступны для сопоставления` : "Подключите CRM, чтобы использовать каталог и AI-ядро"}</p></div>
+      </section>
+      {error && <section className="system-message system-message--error"><strong>Исследование не запущено</strong><p>{error}</p></section>}
+      {result ? (
+        <section className="research-result">
+          <header><div><p className="eyebrow">Результат исследования</p><h2>{country} · {product?.name ?? "весь каталог"}</h2></div><span>{provider}</span></header>
+          <pre>{result}</pre>
+          <p className="source-note">Кандидаты не добавлены в CRM. Сначала проверьте источники и выводы.</p>
+        </section>
+      ) : (
+        <section className="research-placeholder">
+          <div><strong>1</strong><span>Поиск компаний и каталогов</span></div>
+          <div><strong>2</strong><span>Сопоставление с товарами</span></div>
+          <div><strong>3</strong><span>Письмо, звонок и вопросы</span></div>
+        </section>
+      )}
+    </>
+  );
+}
+
 function connectionLabel(mode: CrmConnectionMode) {
   if (mode === "live") return "Онлайн · запись после подтверждения";
   if (mode === "connecting") return "Подключение…";
@@ -465,16 +752,22 @@ function connectionLabel(mode: CrmConnectionMode) {
 function Result({
   counts,
   clients,
+  activities,
   interests,
   stages,
   mode,
 }: {
   counts: { clients: number; activities: number; products: number };
   clients: CrmClient[];
+  activities: CrmActivity[];
   interests: CrmInterest[];
   stages: CrmStage[];
   mode: CrmConnectionMode;
 }) {
+  const [report, setReport] = useState("");
+  const [reportProvider, setReportProvider] = useState("");
+  const [reportError, setReportError] = useState("");
+  const [reportBusy, setReportBusy] = useState(false);
   const stageById = new Map(stages.map((stage) => [stage.id, stage]));
   const activeClientIds = new Set(
     interests
@@ -487,17 +780,53 @@ function Result({
       .map((client) => client.id),
   );
   const overdue = clients.filter((client) => client.nextActionAt && new Date(client.nextActionAt).getTime() < Date.now()).length;
+  const now = new Date();
+  const thursdayStart = new Date(now);
+  const daysSinceThursday = (now.getDay() - 4 + 7) % 7;
+  thursdayStart.setDate(now.getDate() - daysSinceThursday);
+  thursdayStart.setHours(8, 0, 0, 0);
+  if (thursdayStart.getTime() > now.getTime()) thursdayStart.setDate(thursdayStart.getDate() - 7);
+  const weekActivities = activities.filter((item) => new Date(item.createdAt) >= thursdayStart);
+  const processedClients = new Set(weekActivities.map((item) => item.clientId)).size;
+
+  async function generateReport() {
+    setReportBusy(true);
+    setReportError("");
+    try {
+      const response = await askSalesOsAi(
+        "weekly",
+        [
+          `Отчётный период начался ${thursdayStart.toISOString()}.`,
+          `Содержательных событий: ${weekActivities.length}.`,
+          `Уникальных обработанных клиентов: ${processedClients}.`,
+          `Подтверждённых потребностей сейчас: ${interests.length}.`,
+          `Просроченных следующих действий сейчас: ${overdue}.`,
+          "Подготовь доклад руководству: обещания и факты только из CRM, результаты, препятствия, управляемый план и три сценария прогноза до следующего четверга.",
+        ].join("\n"),
+      );
+      setReport(response.reply);
+      setReportProvider(response.provider);
+    } catch (caught) {
+      setReportError(caught instanceof Error ? caught.message : "Не удалось подготовить отчёт");
+    } finally {
+      setReportBusy(false);
+    }
+  }
+
   return (
     <>
       <section className="page-heading">
-        <div><p className="eyebrow">Результат</p><h1>Только измеримое движение</h1><p>Показатели рассчитаны из текущих записей CRM. Финансовый вклад не считается без себестоимости.</p></div>
+        <div><p className="eyebrow">Цикл четверг → четверг</p><h1>План, факт и прогноз</h1><p>Система показывает не активность ради активности, а действия, их последствия и управляемый план до следующего созвона.</p></div>
+        <button className="report-button" onClick={generateReport} disabled={reportBusy || mode !== "live"}><Icons.Spark />{reportBusy ? "Готовлю доклад…" : "Подготовить доклад"}</button>
       </section>
       <section className="metrics">
-        <article><span>Клиенты с активной потребностью</span><strong>{activeClientIds.size}</strong><p>уникальных клиентов</p></article>
-        <article><span>Подтверждённые потребности</span><strong>{interests.length}</strong><p>связок клиент–товар</p></article>
+        <article><span>Обработано в текущем цикле</span><strong>{processedClients}</strong><p>уникальных клиентов</p></article>
+        <article><span>Содержательных событий</span><strong>{weekActivities.length}</strong><p>с четверга 08:00</p></article>
+        <article><span>Активные потребности</span><strong>{activeClientIds.size}</strong><p>уникальных клиентов</p></article>
         <article><span>Просроченные действия</span><strong>{overdue}</strong><p>по полю следующего шага</p></article>
-        <article className="metric-muted"><span>Вклад продаж</span><strong>—</strong><p>нет подтверждённой себестоимости</p></article>
       </section>
+      {reportError && <section className="system-message system-message--error"><strong>Доклад не подготовлен</strong><p>{reportError}</p></section>}
+      {report && <section className="research-result weekly-report"><header><div><p className="eyebrow">Доклад руководству</p><h2>Текущий цикл</h2></div><span>{reportProvider}</span></header><pre>{report}</pre></section>}
       <section className="evidence-panel">
         <div><p className="eyebrow">Качество данных</p><h2>Что система знает об источнике</h2></div>
         <dl>
@@ -507,6 +836,79 @@ function Result({
           <div><dt>Товаров в CRM</dt><dd>{counts.products}</dd></div>
           <div><dt>Режим подключения</dt><dd>{connectionLabel(mode)}</dd></div>
         </dl>
+      </section>
+    </>
+  );
+}
+
+function Integrations({ mode, onRefresh }: { mode: CrmConnectionMode; onRefresh: () => Promise<void> }) {
+  const [mailStatus, setMailStatus] = useState<Awaited<ReturnType<typeof getMailStatus>> | null>(null);
+  const [mailError, setMailError] = useState("");
+  const [mailBusy, setMailBusy] = useState(false);
+  const [syncResult, setSyncResult] = useState<Awaited<ReturnType<typeof syncMail>> | null>(null);
+  const [aiState, setAiState] = useState<{ provider: string; fallback: string[] } | null>(null);
+  const [aiError, setAiError] = useState("");
+  const [aiBusy, setAiBusy] = useState(false);
+
+  useEffect(() => {
+    if (mode !== "live") return;
+    void getMailStatus().then(setMailStatus).catch((error) => setMailError(error.message));
+  }, [mode]);
+
+  async function checkAi() {
+    setAiBusy(true);
+    setAiError("");
+    try {
+      const response = await askSalesOsAi("command", "Проверь доступность ядра. Не меняй данные. Ответь одним коротким предложением.");
+      setAiState({ provider: response.provider, fallback: response.fallback });
+    } catch (caught) {
+      setAiError(caught instanceof Error ? caught.message : "AI недоступен");
+    } finally {
+      setAiBusy(false);
+    }
+  }
+
+  async function runMailSync() {
+    setMailBusy(true);
+    setMailError("");
+    try {
+      const result = await syncMail();
+      setSyncResult(result);
+      await onRefresh();
+    } catch (caught) {
+      setMailError(caught instanceof Error ? caught.message : "Почта недоступна");
+    } finally {
+      setMailBusy(false);
+    }
+  }
+
+  return (
+    <>
+      <section className="page-heading">
+        <div><p className="eyebrow">Ядро системы</p><h1>Источники, память и AI</h1><p>Модели можно заменить. Контекст, правила и доказательства остаются в системе.</p></div>
+      </section>
+      <section className="integration-grid">
+        <article className="integration-card">
+          <header><Icons.Brain /><div><p className="eyebrow">AI-маршрутизатор</p><h2>Основной и резервные модели</h2></div></header>
+          <p>При лимите или временной ошибке ядро передаёт тот же контекст следующему активному провайдеру.</p>
+          {aiState && <div className="integration-fact"><span>Активный провайдер</span><strong>{aiState.provider}</strong></div>}
+          {aiError && <p className="integration-error">{aiError}</p>}
+          <button className="secondary-button" onClick={checkAi} disabled={aiBusy || mode !== "live"}>{aiBusy ? "Проверяю…" : "Проверить AI-ядро"}</button>
+        </article>
+        <article className="integration-card">
+          <header><Icons.Mail /><div><p className="eyebrow">Корпоративная почта</p><h2>IMAP · только чтение</h2></div></header>
+          <p>Письма связываются с клиентами по точному email или однозначному домену. Отправка отключена.</p>
+          <div className="integration-fact"><span>Состояние</span><strong>{mailStatus?.configured ? "Готово к синхронизации" : "Нужен серверный пароль"}</strong></div>
+          {mailStatus && <small>{mailStatus.host}:{mailStatus.port} · TLS · {mailStatus.user || "ящик не указан"}</small>}
+          {mailError && <p className="integration-error">{mailError}</p>}
+          {syncResult && <p className="sync-summary">Проверено: {syncResult.scanned} · связано: {syncResult.linked} · без клиента: {syncResult.unmatched.length}</p>}
+          <button className="secondary-button" onClick={runMailSync} disabled={mailBusy || mode !== "live" || !mailStatus?.configured}>{mailBusy ? "Синхронизирую…" : "Синхронизировать 45 дней"}</button>
+        </article>
+        <article className="integration-card integration-card--wide">
+          <p className="eyebrow">Правило памяти</p>
+          <h2>Суть работы не принадлежит модели</h2>
+          <p>Каталог, история клиентов, источники, недельные планы и правила Sales OS хранятся отдельно. Поэтому переключение Gemini → Groq → OpenRouter не меняет задачу и не обнуляет контекст.</p>
+        </article>
       </section>
     </>
   );
@@ -567,8 +969,10 @@ export function App() {
         </header>
         <main>
           {view === "today" && <Today actions={todayActions} mode={crm.mode} onCapture={() => setCaptureOpen(true)} />}
+          {view === "discovery" && <Discovery products={crm.products} mode={crm.mode} />}
           {view === "opportunities" && <Opportunities items={opportunities} mode={crm.mode} onOpen={setSelected} />}
-          {view === "result" && <Result counts={crm.counts} clients={crm.clients} interests={crm.interests} stages={crm.stages} mode={crm.mode} />}
+          {view === "result" && <Result counts={crm.counts} clients={crm.clients} activities={crm.activities} interests={crm.interests} stages={crm.stages} mode={crm.mode} />}
+          {view === "integrations" && <Integrations mode={crm.mode} onRefresh={crm.refresh} />}
         </main>
         <nav className="mobile-nav" aria-label="Мобильная навигация">
           {nav.map((item) => {

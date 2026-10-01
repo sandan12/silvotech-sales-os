@@ -19,6 +19,16 @@ type Counts = {
 export type CrmClient = {
   id: string;
   name: string;
+  email: string | null;
+  phone: string | null;
+  website: string | null;
+  city: string | null;
+  address: string | null;
+  industry: string | null;
+  contactPerson: string | null;
+  nip: string | null;
+  source: string | null;
+  tags: string[];
   status: string;
   nextActionAt: string | null;
   lastAttemptAt: string | null;
@@ -65,7 +75,14 @@ export type CrmStage = {
 };
 
 export type CrmUpdateDraft = {
-  clientId: string;
+  clientId: string | null;
+  newClient: {
+    name: string;
+    email: string | null;
+    phone: string | null;
+    website: string | null;
+    notes: string | null;
+  } | null;
   content: string;
   type: "note" | "call" | "email" | "meeting" | "task";
   nextActionAt: string | null;
@@ -102,7 +119,7 @@ export function useCrmConnection() {
       supabase
         .from("clients")
         .select(
-          "id,name,status,next_action_at,last_attempt_at,updated_at,notes,stage_id,expected_value,currency",
+          "id,name,email,phone,website,city,address,industry,contact_person,nip,source,tags,status,next_action_at,last_attempt_at,updated_at,notes,stage_id,expected_value,currency",
           { count: "exact" },
         )
         .is("deleted_at", null)
@@ -149,6 +166,16 @@ export function useCrmConnection() {
       (clientsResult.data ?? []).map((item) => ({
         id: item.id,
         name: item.name,
+        email: item.email,
+        phone: item.phone,
+        website: item.website,
+        city: item.city,
+        address: item.address,
+        industry: item.industry,
+        contactPerson: item.contact_person,
+        nip: item.nip,
+        source: item.source,
+        tags: item.tags ?? [],
         status: item.status,
         nextActionAt: item.next_action_at,
         lastAttemptAt: item.last_attempt_at,
@@ -321,9 +348,32 @@ export function useCrmConnection() {
   async function saveConfirmedUpdate(draft: CrmUpdateDraft) {
     const client = supabase;
     if (!client || !user) return { error: "Сначала подключите CRM." };
+    let clientId = draft.clientId;
+
+    if (!clientId && draft.newClient) {
+      const { data: created, error: createError } = await client
+        .from("clients")
+        .insert({
+          name: draft.newClient.name,
+          email: draft.newClient.email,
+          phone: draft.newClient.phone,
+          website: draft.newClient.website,
+          notes: draft.newClient.notes,
+          source: "Sales OS",
+          owner_id: user.id,
+          created_by: user.id,
+        })
+        .select("id")
+        .single();
+
+      if (createError) return { error: createError.message };
+      clientId = created.id;
+    }
+
+    if (!clientId) return { error: "Не выбран и не создан клиент." };
 
     const { error: activityError } = await client.from("client_activities").insert({
-      client_id: draft.clientId,
+      client_id: clientId,
       user_id: user.id,
       type: draft.type,
       content: draft.content,
@@ -336,7 +386,7 @@ export function useCrmConnection() {
       const { error: clientError } = await client
         .from("clients")
         .update({ next_action_at: draft.nextActionAt })
-        .eq("id", draft.clientId);
+        .eq("id", clientId);
       if (clientError) return { error: clientError.message };
     }
 

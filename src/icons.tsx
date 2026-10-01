@@ -38,6 +38,24 @@ export const Icons = {
       <path d="M4 19V9M10 19V5M16 19v-7M22 19H2" />
     </IconBase>
   ),
+  Discovery: (props: SVGProps<SVGSVGElement>) => (
+    <IconBase {...props}>
+      <circle cx="11" cy="11" r="7" />
+      <path d="m16 16 5 5M8 11h6M11 8v6" />
+    </IconBase>
+  ),
+  Brain: (props: SVGProps<SVGSVGElement>) => (
+    <IconBase {...props}>
+      <path d="M9.5 4A3.5 3.5 0 0 0 6 7.5v.3A3.5 3.5 0 0 0 4 11v1a3 3 0 0 0 3 3v.5A3.5 3.5 0 0 0 10.5 19H12V5.5A2.5 2.5 0 0 0 9.5 3Z" />
+      <path d="M14.5 4A3.5 3.5 0 0 1 18 7.5v.3a3.5 3.5 0 0 1 2 3.2v1a3 3 0 0 1-3 3v.5a3.5 3.5 0 0 1-3.5 3.5H12V5.5A2.5 2.5 0 0 1 14.5 3ZM8 9h4M12 14h4" />
+    </IconBase>
+  ),
+  Mail: (props: SVGProps<SVGSVGElement>) => (
+    <IconBase {...props}>
+      <rect x="3" y="5" width="18" height="14" rx="2" />
+      <path d="m4 7 8 6 8-6" />
+    </IconBase>
+  ),
   Mic: (props: SVGProps<SVGSVGElement>) => (
     <IconBase {...props}>
       <rect x="9" y="3" width="6" height="12" rx="3" />

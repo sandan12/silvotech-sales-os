@@ -32,12 +32,22 @@ await page
 await page.getByRole("button", { name: "Разобрать сообщение" }).click();
 await page.getByLabel("Клиент").waitFor();
 await page.getByText("Звонок", { exact: true }).waitFor();
-await page.getByText("Следующее действие", { exact: true }).waitFor();
-const confirm = page.getByRole("button", { name: "Подтвердить и записать" });
+await page.getByText("Клиента нет в CRM — подготовлено создание", { exact: true }).waitFor();
+await page.getByText("Рекомендация", { exact: true }).waitFor();
+await page.getByText("Что нужно узнать", { exact: true }).waitFor();
+await page.getByText("Черновик письма", { exact: true }).waitFor();
+const confirm = page.getByRole("button", { name: /(?:Подтвердить и записать|Создать клиента и записать)/ });
 if (!(await confirm.isDisabled())) failures.push("CRM write enabled without live connection and client");
 await page.getByRole("button", { name: "Закрыть" }).click();
-await page.getByRole("button", { name: "Результат" }).click();
-await page.getByRole("heading", { name: "Только измеримое движение" }).waitFor();
+await page.getByRole("button", { name: "Поиск рынка" }).click();
+await page.getByRole("heading", { name: "Новые клиенты одной командой" }).waitFor();
+if (!(await page.getByRole("button", { name: /Найти подходящих клиентов/ }).isDisabled())) {
+  failures.push("market discovery enabled without live CRM");
+}
+await page.getByRole("button", { name: "Неделя" }).click();
+await page.getByRole("heading", { name: "План, факт и прогноз" }).waitFor();
+await page.getByRole("button", { name: "Ядро" }).click();
+await page.getByRole("heading", { name: "Источники, память и AI" }).waitFor();
 
 const desktopOverflow = await page.evaluate(
   () => document.documentElement.scrollWidth > document.documentElement.clientWidth,
